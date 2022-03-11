@@ -19,7 +19,7 @@ from zim.plugins import PluginClass, InsertedObjectTypeExtension
 from zim.actions import action
 from zim.signals import SignalEmitter, ConnectorMixin, SIGNAL_RUN_LAST
 from zim.utils import natural_sort_key
-from zim.config import String
+from zim.config import String, ConfigManager
 from zim.main import ZIM_APPLICATION
 from zim.formats import ElementTreeModule as ElementTree
 from zim.formats import TABLE, HEADROW, HEADDATA, TABLEROW, TABLEDATA
@@ -42,12 +42,16 @@ SYNTAX_WIKI_PANGO2 = [
 	(r'<mark>\1</mark>', r'<span background="yellow">\1</span>', r'__\1__'),
 	(r'<code>\1</code>', r'<tt>\1</tt>', r"''\1''"),
 	(r'<strike>\1</strike>', r'<s>\1</s>', r'~~\1~~'),
-	# Link url without link text  - Link url has always size = 0
-	(r'<link href="\1">\1</link>', r'<span foreground="blue">\1<span size="0">\1</span></span>', r'[[\1]]'),
-	# Link url with link text  - Link url has always size = 0
-	(r'<link href="\1">\2</link>', r'<span foreground="blue">\2<span size="0">\1</span></span>', r'[[\2|\1]]'),
+	# Link url without link text  - Link url is invisible but size="0" is not allowed by GTK so we make a comment
+	# Note that we need to make sure we match the regex CELL_LINK_REGEX for the following two lines
+	(r'<link href="\1">\1</link>', r'<span color="TAG_LINK_COLOR">\1<!-- <span>\1</span> --></span>', r'[[\1]]'),
+	(r'<link href="\1">\2</link>', r'<span color="TAG_LINK_COLOR">\2<!-- <span>\1</span> --></span>', r'[[\2|\1]]'),
+
 	(r'<emphasis>\1</emphasis>', r'<i>\1</i>', r'//\1//')
 ]
+
+CELL_LINK_REGEX = r'<span color=".*?">.*?<!-- <span.*?>(.*?)</span> --></span>'
+
 
 # Possible alignments in edit-table-dialog
 COLUMNS_ALIGNMENTS = {'left': ['left', Gtk.STOCK_JUSTIFY_LEFT, _('Left')],  # T: alignment option
@@ -64,6 +68,9 @@ def reg_replace(string):
 	'''
 	string = string.replace('*', '\*').replace('[', '\[').replace(']', '\]') \
 		.replace(r'\1', '(.+?)', 1).replace(r'\2', '(.+?)', 1).replace('|', '\|')
+
+	string = string.replace('TAG_LINK_COLOR', r'.+?')
+
 	return re.compile(string)
 
 # Regex compiled search patterns
@@ -107,6 +114,9 @@ Exporting them to various formats (i.e. HTML/LaTeX) completes the feature set.
 	)
 
 
+#hack - this is not listening for changes or anything, just get the tag style info
+TAG_LINK_STYLE = dict(ConfigManager.get_config_dict('style.conf')['Tag link'].all_items())
+
 class CellFormatReplacer:
 	'''
 	Static class for converting formated text from one into the other format:
@@ -133,12 +143,15 @@ class CellFormatReplacer:
 			# Links without text are handled as [[link]] and not as [[link|text]], therefore reverse order of replacements
 			for pattern, replace in zip(reversed(SYNTAX_WIKI_PANGO), reversed(SYNTAX_WIKI_PANGO2)):
 				text = pattern[2].sub(replace[1], text)
+
+		text = text.replace('TAG_LINK_COLOR', TAG_LINK_STYLE['foreground'])
 		return text
 
 	@staticmethod
 	def zim_to_cell(text):
 		for pattern, replace in zip(SYNTAX_WIKI_PANGO, SYNTAX_WIKI_PANGO2):
 			text = pattern[0].sub(replace[1], text)
+		text = text.replace('TAG_LINK_COLOR', TAG_LINK_STYLE['foreground'])
 		return text
 
 	@staticmethod
@@ -584,8 +597,7 @@ class TableViewWidget(InsertedObjectWidget):
 
 	def get_linkurl(self, celltext):
 		'''	Checks a cellvalue if it contains a link and returns only the link value '''
-		linkregex = r'<span foreground="blue">.*?<span.*?>(.*?)</span></span>'
-		matches = re.match(linkregex, celltext)
+		matches = re.match(CELL_LINK_REGEX, celltext)
 		linkvalue = matches.group(1) if matches else None
 		return linkvalue
 
